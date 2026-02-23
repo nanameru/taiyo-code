@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "taiyo-cli"
+version = "1.0.0"
+description = "Claude Code Clone - AI-powered CLI coding assistant with TUI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.40.0",
+    "textual>=0.85.0",
+    "rich>=13.0.0",
+    "prompt-toolkit>=3.0.0",
+    "pygments>=2.17.0",
+    "click>=8.1.0",
+    "pathspec>=0.12.0",
+]
+
+[project.scripts]
+taiyo = "src.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
