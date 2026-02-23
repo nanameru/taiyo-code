@@ -311,7 +311,7 @@ class TaiyoApp(App):
             return
 
         self._add_message("user", text)
-        await self._process_message(text)
+        self._process_message(text)
 
     async def _handle_command(self, cmd: str):
         parts = cmd.split(maxsplit=1)
