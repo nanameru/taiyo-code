@@ -27,30 +27,15 @@ class OllamaClient:
         self.tools = {t.name: t for t in tools}
         self.messages: list[Message] = []
         self.client = httpx.AsyncClient(timeout=300.0)
-        self._max_tool_rounds = 10  # Prevent infinite loops
+        self._max_tool_rounds = 15
 
     def _build_tools_schema(self) -> list[dict]:
         return [t.to_api_schema() for t in self.tools.values()]
 
-    def _build_tools_description(self) -> str:
-        """Build a text description of tools for the system prompt."""
-        lines = ["Available tools (call by outputting JSON with 'name' and 'arguments'):"]
-        for t in self.tools.values():
-            params = t.get_schema().get("properties", {})
-            param_desc = ", ".join(
-                f"{k}: {v.get('description', v.get('type', ''))}"
-                for k, v in params.items()
-            )
-            lines.append(f"  - {t.name}: {t.description}")
-            lines.append(f"    Parameters: {param_desc}")
-        lines.append("")
-        lines.append("To call a tool, output ONLY a JSON object like:")
-        lines.append('{"name": "tool_name", "arguments": {"param1": "value1"}}')
-        lines.append("After receiving tool results, provide your response to the user.")
-        return "\n".join(lines)
-
     def _build_messages(self) -> list[dict]:
-        system_content = self.config.system_prompt + "\n\n" + self._build_tools_description()
+        # Inject working directory into system prompt
+        system_content = self.config.system_prompt
+        system_content += f"\n\n## CURRENT CONTEXT\n- Working directory: {self.config.working_dir}\n- When using file paths, use this as the base directory.\n"
         msgs = [{"role": "system", "content": system_content}]
         for m in self.messages:
             msg: dict[str, Any] = {"role": m.role, "content": m.content}
@@ -60,48 +45,84 @@ class OllamaClient:
         return msgs
 
     def _try_parse_tool_call(self, text: str) -> dict | None:
-        """Try to parse a tool call from text content."""
+        """Try to parse a tool call from text content. Handles many formats."""
         text = text.strip()
-        # Try direct JSON parse
+
+        # Strip markdown code blocks if present
+        # ```json ... ``` or ``` ... ```
+        code_block = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
+        if code_block:
+            text = code_block.group(1).strip()
+
+        # 1. Direct JSON parse
         try:
             data = json.loads(text)
-            if isinstance(data, dict) and "name" in data:
-                name = data["name"]
-                args = data.get("arguments", data.get("params", data.get("parameters", {})))
-                if name in self.tools:
-                    return {"name": name, "arguments": args if isinstance(args, dict) else {}}
+            result = self._extract_tool_from_json(data)
+            if result:
+                return result
         except json.JSONDecodeError:
             pass
 
-        # Try to find JSON in text
-        json_pattern = r'\{[^{}]*"name"\s*:\s*"[^"]+?"[^{}]*\}'
-        matches = re.findall(json_pattern, text, re.DOTALL)
-        for match in matches:
+        # 2. Find JSON objects containing "name" in text
+        # Match nested JSON (handles {"name": "x", "arguments": {"key": "val"}})
+        brace_depth = 0
+        json_start = -1
+        candidates = []
+        for i, ch in enumerate(text):
+            if ch == '{':
+                if brace_depth == 0:
+                    json_start = i
+                brace_depth += 1
+            elif ch == '}':
+                brace_depth -= 1
+                if brace_depth == 0 and json_start >= 0:
+                    candidates.append(text[json_start:i + 1])
+                    json_start = -1
+
+        for candidate in candidates:
             try:
-                data = json.loads(match)
-                if isinstance(data, dict) and "name" in data:
-                    name = data["name"]
-                    args = data.get("arguments", data.get("params", data.get("parameters", {})))
-                    if name in self.tools:
-                        return {"name": name, "arguments": args if isinstance(args, dict) else {}}
+                data = json.loads(candidate)
+                result = self._extract_tool_from_json(data)
+                if result:
+                    return result
             except json.JSONDecodeError:
                 continue
 
-        # Try multi-line JSON extraction
-        try:
-            # Find first { and last }
-            start = text.find("{")
-            end = text.rfind("}")
-            if start >= 0 and end > start:
-                candidate = text[start : end + 1]
-                data = json.loads(candidate)
-                if isinstance(data, dict) and "name" in data:
-                    name = data["name"]
-                    args = data.get("arguments", data.get("params", data.get("parameters", {})))
-                    if name in self.tools:
-                        return {"name": name, "arguments": args if isinstance(args, dict) else {}}
-        except (json.JSONDecodeError, ValueError):
-            pass
+        # 3. Try line-by-line (model might output tool call on one line with text around it)
+        for line in text.split('\n'):
+            line = line.strip()
+            if line.startswith('{') and line.endswith('}'):
+                try:
+                    data = json.loads(line)
+                    result = self._extract_tool_from_json(data)
+                    if result:
+                        return result
+                except json.JSONDecodeError:
+                    continue
+
+        return None
+
+    def _extract_tool_from_json(self, data: Any) -> dict | None:
+        """Extract tool name and arguments from a parsed JSON object."""
+        if not isinstance(data, dict):
+            return None
+
+        # Format: {"name": "tool", "arguments": {...}}
+        if "name" in data:
+            name = data["name"]
+            args = data.get("arguments", data.get("params", data.get("parameters", {})))
+            if name in self.tools:
+                return {"name": name, "arguments": args if isinstance(args, dict) else {}}
+
+        # Format: {"function": {"name": "tool", "arguments": {...}}}
+        if "function" in data and isinstance(data["function"], dict):
+            return self._extract_tool_from_json(data["function"])
+
+        # Format: {"tool": "bash", "command": "ls"} (flat format)
+        if "tool" in data and data["tool"] in self.tools:
+            name = data["tool"]
+            args = {k: v for k, v in data.items() if k != "tool"}
+            return {"name": name, "arguments": args}
 
         return None
 
@@ -117,12 +138,12 @@ class OllamaClient:
             response_text = ""
             tool_calls = []
 
-            # Use non-streaming for more reliable tool call detection
+            # Use non-streaming for reliable tool call detection
             response_data = await self._request()
             msg_data = response_data.get("message", {})
             response_text = msg_data.get("content", "")
 
-            # Check for proper tool_calls field first
+            # Check for proper tool_calls field first (native Ollama tool calling)
             if msg_data.get("tool_calls"):
                 tool_calls = msg_data["tool_calls"]
             else:
@@ -130,7 +151,6 @@ class OllamaClient:
                 parsed = self._try_parse_tool_call(response_text)
                 if parsed:
                     tool_calls = [{"function": parsed}]
-                    # Don't yield the JSON as text to user
                 else:
                     # Regular text response - yield it
                     if response_text:
@@ -176,7 +196,6 @@ class OllamaClient:
                         "name": tool_name,
                         "result": result,
                     }
-                    # Add tool result to messages
                     self.messages.append(
                         Message(
                             role="tool",
