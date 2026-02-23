@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os
 import asyncio
+import time
 from datetime import datetime
 
 from textual import on, work
@@ -20,11 +21,14 @@ from textual.widgets import (
     LoadingIndicator,
 )
 from textual.message import Message as TextualMessage
+from textual.timer import Timer
 
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
+from rich.table import Table
+from rich.align import Align
 
 from .config import Config
 from .api import OllamaClient
@@ -56,6 +60,136 @@ Commands: `/clear` - clear chat, `/model` - change model, `/quit` - exit
 Working directory: `{cwd}`
 Model: `{model}`
 """
+
+# Thinking animation frames
+THINKING_FRAMES = [
+    "    ○ ○ ○",
+    "    ● ○ ○",
+    "    ● ● ○",
+    "    ● ● ●",
+    "    ○ ● ●",
+    "    ○ ○ ●",
+]
+
+THINKING_BRAIN_FRAMES = [
+    r"""
+      ╭─────────────────────────────╮
+      │  🧠  Thinking               │
+      │                             │
+      │    ◐  Processing...         │
+      │    ░░░░░░░░░░░░░░░░░░░░     │
+      ╰─────────────────────────────╯""",
+    r"""
+      ╭─────────────────────────────╮
+      │  🧠  Thinking.              │
+      │                             │
+      │    ◓  Analyzing...          │
+      │    ▓░░░░░░░░░░░░░░░░░░░     │
+      ╰─────────────────────────────╯""",
+    r"""
+      ╭─────────────────────────────╮
+      │  🧠  Thinking..             │
+      │                             │
+      │    ◑  Reasoning...          │
+      │    ▓▓▓░░░░░░░░░░░░░░░░     │
+      ╰─────────────────────────────╯""",
+    r"""
+      ╭─────────────────────────────╮
+      │  🧠  Thinking...            │
+      │                             │
+      │    ◒  Formulating...        │
+      │    ▓▓▓▓▓░░░░░░░░░░░░░░     │
+      ╰─────────────────────────────╯""",
+    r"""
+      ╭─────────────────────────────╮
+      │  🧠  Thinking...            │
+      │                             │
+      │    ◐  Composing...          │
+      │    ▓▓▓▓▓▓▓▓░░░░░░░░░░     │
+      ╰─────────────────────────────╯""",
+    r"""
+      ╭─────────────────────────────╮
+      │  🧠  Thinking...            │
+      │                             │
+      │    ◓  Almost there...       │
+      │    ▓▓▓▓▓▓▓▓▓▓▓░░░░░░░     │
+      ╰─────────────────────────────╯""",
+]
+
+
+class ThinkingWidget(Static):
+    """Animated thinking indicator widget."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._frame = 0
+        self._start_time = time.time()
+        self._timer: Timer | None = None
+        self._phase = "thinking"  # thinking, tool_exec
+
+    def on_mount(self):
+        self._timer = self.set_interval(0.3, self._animate)
+        self._render_frame()
+
+    def _animate(self):
+        self._frame = (self._frame + 1) % len(THINKING_FRAMES)
+        self._render_frame()
+
+    def _render_frame(self):
+        elapsed = time.time() - self._start_time
+        elapsed_str = f"{elapsed:.1f}s"
+
+        dots_frame = THINKING_FRAMES[self._frame]
+        spinner_chars = "◐◓◑◒"
+        spinner = spinner_chars[self._frame % len(spinner_chars)]
+
+        if self._phase == "thinking":
+            labels = ["Processing", "Analyzing", "Reasoning", "Formulating", "Composing", "Generating"]
+            label = labels[self._frame % len(labels)]
+
+            # Progress bar animation
+            bar_len = 20
+            filled = int((self._frame / len(THINKING_FRAMES)) * bar_len) + 1
+            filled = min(filled, bar_len)
+            bar = "▓" * filled + "░" * (bar_len - filled)
+
+            content = Text()
+            content.append(f"\n  {spinner} ", style="bold cyan")
+            content.append("Thinking", style="bold white")
+            content.append(f"  ({elapsed_str})\n\n", style="dim")
+            content.append(f"    {label}...\n", style="italic dim")
+            content.append(f"    {bar}\n", style="cyan")
+            content.append(f"  {dots_frame}\n", style="bold cyan")
+
+            panel = Panel(
+                content,
+                border_style="cyan",
+                padding=(0, 1),
+            )
+        else:
+            content = Text()
+            content.append(f"\n  {spinner} ", style="bold yellow")
+            content.append("Executing Tool", style="bold white")
+            content.append(f"  ({elapsed_str})\n\n", style="dim")
+            content.append(f"    Running...\n", style="italic dim")
+            content.append(f"  {dots_frame}\n", style="bold yellow")
+
+            panel = Panel(
+                content,
+                border_style="yellow",
+                padding=(0, 1),
+            )
+
+        self.update(panel)
+
+    def set_phase(self, phase: str):
+        self._phase = phase
+        self._render_frame()
+
+    def stop(self):
+        if self._timer:
+            self._timer.stop()
+            self._timer = None
 
 
 class ChatMessage(Static):
@@ -203,6 +337,11 @@ class TaiyoApp(App):
         padding: 0 1;
     }
 
+    ThinkingWidget {
+        height: auto;
+        margin: 0 1;
+    }
+
     LoadingIndicator {
         height: 1;
     }
@@ -219,6 +358,7 @@ class TaiyoApp(App):
         self.config = config or Config.from_env()
         self._is_processing = False
         self._current_stream: StreamingMessage | None = None
+        self._thinking_widget: ThinkingWidget | None = None
         self._init_tools()
 
     def _init_tools(self):
@@ -258,7 +398,6 @@ class TaiyoApp(App):
         if connected:
             models = await self.client.list_models()
             if models:
-                # Auto-select first available model if configured one isn't available
                 model_names = [m.split(":")[0] for m in models]
                 if not any(self.config.model in m or m in self.config.model for m in models):
                     self.config.model = models[0]
@@ -293,6 +432,22 @@ class TaiyoApp(App):
         self.call_after_refresh(self._scroll_to_bottom)
         return msg
 
+    def _show_thinking(self) -> ThinkingWidget:
+        """Show the animated thinking indicator."""
+        container = self.query_one("#chat-container", VerticalScroll)
+        thinking = ThinkingWidget()
+        container.mount(thinking)
+        self._thinking_widget = thinking
+        self.call_after_refresh(self._scroll_to_bottom)
+        return thinking
+
+    def _hide_thinking(self):
+        """Remove the thinking indicator."""
+        if self._thinking_widget:
+            self._thinking_widget.stop()
+            self._thinking_widget.remove()
+            self._thinking_widget = None
+
     @on(Input.Submitted, "#user-input")
     async def handle_input(self, event: Input.Submitted):
         text = event.value.strip()
@@ -320,7 +475,6 @@ class TaiyoApp(App):
         if command == "/clear":
             self.client.clear_history()
             container = self.query_one("#chat-container", VerticalScroll)
-            # Remove all children except logo and welcome
             children = list(container.children)
             for child in children[2:]:
                 child.remove()
@@ -369,25 +523,54 @@ class TaiyoApp(App):
 
         container = self.query_one("#chat-container", VerticalScroll)
 
-        # Create streaming message widget
-        stream_widget = StreamingMessage()
-        container.mount(stream_widget)
-        self._current_stream = stream_widget
+        # Show thinking animation
+        thinking = self._show_thinking()
 
         try:
+            first_text = True
+            stream_widget = None
+
             async for chunk in self.client.chat_stream(text):
                 if chunk["type"] == "text":
-                    stream_widget.append_text(chunk["content"])
+                    # Hide thinking on first text response
+                    if first_text:
+                        self._hide_thinking()
+                        stream_widget = StreamingMessage()
+                        container.mount(stream_widget)
+                        self._current_stream = stream_widget
+                        first_text = False
+
+                    if stream_widget:
+                        stream_widget.append_text(chunk["content"])
                     self.call_after_refresh(self._scroll_to_bottom)
 
                 elif chunk["type"] == "tool_call":
+                    # Switch thinking to tool execution phase
+                    if self._thinking_widget:
+                        self._thinking_widget.set_phase("tool_exec")
+
+                    # If we had been streaming text, finalize it
+                    if stream_widget and stream_widget.text:
+                        stream_widget.finalize()
+                        stream_widget = None
+
+                    # Hide thinking before showing tool call
+                    self._hide_thinking()
+
                     name = chunk["name"]
                     args = chunk["arguments"]
                     args_str = "\n".join(f"  {k}: {v}" for k, v in args.items())
                     tool_msg = f"[bold]Tool:[/] {name}\n{args_str}"
                     self._add_message("tool", tool_msg)
 
+                    # Show thinking again while tool executes
+                    thinking = self._show_thinking()
+                    thinking.set_phase("tool_exec")
+
                 elif chunk["type"] == "tool_result":
+                    # Hide thinking
+                    self._hide_thinking()
+
                     result = chunk["result"]
                     name = chunk["name"]
                     output = result.to_text()
@@ -398,19 +581,22 @@ class TaiyoApp(App):
                         "tool", f"[bold]{name}[/] {status}\n{output}"
                     )
 
-                    # After tool result, create new streaming widget for follow-up
-                    stream_widget.finalize()
-                    stream_widget = StreamingMessage()
-                    container.mount(stream_widget)
-                    self._current_stream = stream_widget
+                    # Show thinking for follow-up response
+                    thinking = self._show_thinking()
+                    first_text = True
+                    stream_widget = None
 
-            # Finalize streaming
-            stream_widget.finalize()
-            if not stream_widget.text:
-                stream_widget.remove()
+            # Done - hide thinking and finalize
+            self._hide_thinking()
+            if stream_widget:
+                stream_widget.finalize()
+                if not stream_widget.text:
+                    stream_widget.remove()
 
         except Exception as e:
-            stream_widget.remove()
+            self._hide_thinking()
+            if stream_widget:
+                stream_widget.remove()
             error_msg = str(e)
             if "Connection refused" in error_msg:
                 error_msg = "Cannot connect to Ollama. Make sure it's running: `ollama serve`"
@@ -419,6 +605,7 @@ class TaiyoApp(App):
             self._add_message("error", error_msg)
 
         finally:
+            self._hide_thinking()
             self._is_processing = False
             self._current_stream = None
             self._update_status(
@@ -431,5 +618,6 @@ class TaiyoApp(App):
 
     def action_cancel(self):
         if self._is_processing:
+            self._hide_thinking()
             self._is_processing = False
             self._update_status("Cancelled")
