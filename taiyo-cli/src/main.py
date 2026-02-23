@@ -28,17 +28,17 @@ VERSION = "1.0.0"
 @click.option("--model", "-m", default=None, help="Ollama model to use")
 @click.option("--host", default=None, help="Ollama host URL")
 @click.option("--cwd", "-d", default=None, help="Working directory")
-@click.option("--repl", is_flag=True, default=False, help="Use simple REPL mode instead of TUI")
+@click.option("--tui", is_flag=True, default=False, help="Use TUI mode instead of REPL")
 @click.version_option(version=VERSION, prog_name="Taiyo CLI")
-def main(model: str | None, host: str | None, cwd: str | None, repl: bool):
+def main(model: str | None, host: str | None, cwd: str | None, tui: bool):
     """Taiyo CLI - AI-Powered Coding Assistant
 
     An interactive terminal-based AI assistant for software engineering tasks.
     Uses local Ollama models for inference.
 
     Examples:
-        taiyo                    # Start TUI mode
-        taiyo --repl             # Start simple REPL mode
+        taiyo                    # Start REPL mode (default)
+        taiyo --tui              # Start TUI mode
         taiyo -m codellama       # Use a specific model
     """
     config = Config.from_env()
@@ -50,10 +50,10 @@ def main(model: str | None, host: str | None, cwd: str | None, repl: bool):
     if cwd:
         config.working_dir = os.path.abspath(cwd)
 
-    if repl:
-        asyncio.run(run_repl(config))
-    else:
+    if tui:
         run_tui(config)
+    else:
+        asyncio.run(run_repl(config))
 
 
 def run_tui(config: Config):
