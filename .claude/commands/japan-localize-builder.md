@@ -441,44 +441,74 @@ npx vercel --prod
 
 ---
 
-### Phase 8: OpenClawでClerk認証セットアップ（最終ステップ）
+### Phase 8: Claude CodeからOpenClawへClerk認証セットアップを委譲（自動実行）
 
-**⚠️ このフェーズはClaude Codeでは実行できない。OpenClawに委譲する。**
+**⚡ Claude CodeのターミナルからOpenClaw CLIを直接呼び出してClerk認証を自動セットアップする。ユーザーに手動操作を求めない。**
 
-Clerk認証のセットアップには、Clerkダッシュボードでのブラウザ操作（アプリ作成、APIキー取得）が必要であり、Claude Codeのターミナルからは実行できない。
+Clerk認証のセットアップには、Clerkダッシュボードでのブラウザ操作（アプリ作成、APIキー取得）が必要。OpenClawはブラウザツールを持っているため、`openclaw agent`コマンドで委譲する。
 
-**ユーザーへの指示:**
-
-以下のメッセージをユーザーに表示する:
-
+**1. OpenClawのGateway稼働確認**
+```bash
+openclaw status
 ```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔐 Clerk認証セットアップ（最終ステップ）
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-コードの実装はすべて完了しました！
-残りはClerk認証のセットアップのみです。
-
-OpenClawを起動して、以下のスキルを実行してください:
-
-  📂 skills/clerk-auth-component
-
-このスキルが自動で以下を行います:
-  1. Clerkダッシュボードで新規アプリ作成
-  2. APIキーの取得と .env.local への設定
-  3. Convex との連携設定
-  4. サインイン/サインアップの動作確認
-
-💡 OpenClawの起動方法:
-  ターミナルで `openclaw` と実行するか、
-  ブラウザで OpenClaw のUIを開いてください。
-
-💡 実行時にプロジェクトパスを指定:
-  ~/<project-name>
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Gatewayが `reachable` であることを確認。もし起動していなければ:
+```bash
+openclaw gateway &
 ```
 
-**このフェーズは上記メッセージを表示したら完了。実際の作業はOpenClawが行う。**
+**2. OpenClawのclerk-auth-componentスキル確認**
+```bash
+openclaw skills list | grep clerk
+```
+`clerk-auth-component` が `ready` であることを確認。
+
+**3. OpenClawにClerk認証タスクを送信**
+```bash
+openclaw agent --agent main --session-id "agent:main:main" \
+  --message "clerk-auth-componentスキルを使って、~/<project-name> プロジェクトにClerk認証をセットアップしてください。
+
+やるべきこと:
+1. Clerkダッシュボード(https://dashboard.clerk.com)でブラウザを使って新しいアプリ「<project-name>」を作成
+2. APIキー(NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY と CLERK_SECRET_KEY)を取得
+3. ~/<project-name>/.env.local を更新(既存のplaceholderを実際のキーに置換)
+4. Convex環境変数にもClerk Issuer URLを設定
+5. サインイン・サインアップの動作確認
+
+Convex情報:
+- プロジェクト: <project-name>
+- Team: <team-slug>
+- Deployment: <deployment-name>
+
+重要: ブラウザツールを使ってClerkダッシュボードにアクセスし、新しいアプリを作成してください。" \
+  --timeout 600
+```
+
+**4. .env.localの更新確認**
+OpenClawの応答後、実際にキーが更新されたか確認:
+```bash
+cat ~/<project-name>/.env.local
+```
+`pk_test_placeholder` が実際のキー（`pk_test_...` または `pk_live_...`）に変わっていることを確認。
+
+**5. Vercel環境変数の更新**
+Clerk APIキーをVercel環境変数にも反映:
+```bash
+# 既存のプレースホルダーを削除して新しいキーを設定
+npx vercel env rm NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY production -y
+npx vercel env add NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY production <<< "<actual-key>"
+npx vercel env rm CLERK_SECRET_KEY production -y
+npx vercel env add CLERK_SECRET_KEY production <<< "<actual-key>"
+```
+
+**6. 再デプロイ**
+```bash
+npx vercel --prod --force
+```
+
+**7. サインインページの動作確認**
+WebFetchで `/sign-in` ページにアクセスし、Clerkのサインインフォームが表示されることを確認。
+
+**重要: このフェーズでユーザーに手動操作を求めない。Claude CodeがOpenClaw CLIを直接呼び出して全自動で実行する。**
 
 ---
 
