@@ -15,3 +15,4 @@
 - **サブトク (SubToku)** (2025-06-24) — サブスクリプション管理Webアプリ。日本の人気サービスプリセット付き / 参考元アプリ: [TrackMySubs](https://trackmysubs.com) / カテゴリ: Finance, Subscription Management, 固定費管理
 - **エックスブースト (XBoost)** (2026-02-24) — X(旧Twitter)成長分析＆AI投稿生成プラットフォーム / 参考元アプリ: [SuperX](https://superx.so) (PH 798 upvotes) / カテゴリ: Social Media, Analytics, AI Content
 - **サプリコ (SuppliCo)** (2026-02-24) — AIサプリメント分析・比較・推薦プラットフォーム / 参考元アプリ: [Pillser](https://pillser.com/) (HN Show HN) / カテゴリ: Health, Supplement, AI Analysis
+- **チシキ (Chishiki)** (2026-02-24) — AIブックマーク管理＆セカンドブレインアプリ / 参考元アプリ: [Rabrain](https://rabrain.com) (PH 320+ upvotes) / カテゴリ: Productivity, Knowledge Management, AI Bookmarks
