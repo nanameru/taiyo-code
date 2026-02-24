@@ -35,14 +35,17 @@
 
 ━━━ ステージ5: デプロイ & 公開 ━━━
 - [ ] Phase 7: GitHub リポジトリ作成 & プッシュ
-- [ ] Phase 7.3: Convex & Clerk セットアップ
+- [ ] Phase 7.3: Convex セットアップ（自動・質問なし）
 - [ ] Phase 7.5: Vercelデプロイ
 
 ━━━ ステージ5.5: 品質改善ループ ━━━
 - [ ] Phase 7.8: 品質改善ループ（最低3周、実運用レベルまで）
 
-━━━ ステージ6: 完了 ━━━
-- [ ] Phase 8: built-products.md 更新 & レポート出力
+━━━ ステージ6: Clerk認証（最終ステップ） ━━━
+- [ ] Phase 8: OpenClawでClerk認証セットアップ
+
+━━━ ステージ7: 完了 ━━━
+- [ ] Phase 9: built-products.md 更新 & レポート出力
 ```
 
 ---
@@ -207,22 +210,46 @@ npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --
 **2. 依存パッケージインストール**
 ```bash
 npx shadcn@latest init
-npx shadcn@latest add button card dialog input label select table tabs toast
-npx convex init
-npm install @clerk/nextjs
+npx shadcn@latest add button card dialog input label select table tabs sonner badge separator sheet avatar dropdown-menu popover calendar command tooltip progress textarea switch chart
+npm install convex @clerk/nextjs
 ```
 
-**3. コード実装（Claude Codeが直接書く）**
+**3. Convex Provider の実装（Clerkキー未設定でもビルド可能にする）**
+
+`src/components/providers/convex-client-provider.tsx` は以下のように実装すること:
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` が未設定またはプレースホルダの場合、ClerkProviderをスキップして子要素をそのまま返す
+- クライアントサイドでのみClerkProviderをマウントする（`useState` + `useEffect` でマウント制御）
+- これにより、Clerkのセットアップが完了していなくてもビルド＆静的ページが正常に動作する
+
+```tsx
+// パターン:
+const [mounted, setMounted] = useState(false);
+useEffect(() => { setMounted(true); }, []);
+
+if (!mounted || !isValidClerkKey(clerkPubKey)) {
+  return <>{children}</>;
+}
+
+// ClerkProvider + ConvexProviderWithClerk でラップ
+```
+
+**4. ダッシュボードのSSR対応**
+- `src/app/dashboard/layout.tsx` はServer Componentにして `export const dynamic = "force-dynamic"` を設定
+- サイドバー等のClient Componentは別ファイル `src/components/dashboard-shell.tsx` に分離
+- `UserButton` (Clerk) は `dynamic(() => import("@clerk/nextjs").then(...), { ssr: false })` で読み込む
+
+**5. コード実装（Claude Codeが直接書く）**
 Write/Editツールで以下を順に実装:
 1. Convexスキーマ (`convex/schema.ts`)
 2. Convex関数 (`convex/` 内のqueries/mutations/actions)
-3. レイアウト (`src/app/layout.tsx`) — Noto Sans JP、Clerk Provider、Convex Provider
-4. 全ページ実装 (`src/app/` 配下)
-5. コンポーネント (`src/components/` 配下)
-6. 必須ページ6つ (about/help/terms/privacy/legal/status)
-7. SEO設定 (metadata, sitemap, robots)
+3. `convex/convex.config.ts` — `import { defineApp } from "convex/server"; const app = defineApp(); export default app;`
+4. レイアウト (`src/app/layout.tsx`) — Noto Sans JP、Provider
+5. 全ページ実装 (`src/app/` 配下)
+6. コンポーネント (`src/components/` 配下)
+7. 必須ページ6つ (about/help/terms/privacy/legal/status)
+8. SEO設定 (metadata, sitemap, robots)
 
-**4. 実装ルール**
+**6. 実装ルール**
 - shadcn/uiコンポーネントを最大活用
 - `any` 型は絶対使わない
 - Server Componentsを最大活用（`"use client"` は最小限）
@@ -332,20 +359,38 @@ git push -u origin main
 
 ---
 
-### Phase 7.3: Convex & Clerk セットアップ
+### Phase 7.3: Convex セットアップ（自動・質問なし）
 
-**1. Convex**
+**⚡ ユーザーに一切質問せず、自動で完了させること。**
+
+**1. チームslugの自動取得**
+既存のConvexプロジェクトの `.env.local` から `CONVEX_DEPLOYMENT` の `team:` コメントを読み取ってチームslugを取得する:
+
 ```bash
-npx convex dev
+# 既存プロジェクトからチームslugを検索
+find ~/ -maxdepth 3 -name ".env.local" -exec grep -l "CONVEX_DEPLOYMENT" {} \; 2>/dev/null | head -1 | xargs grep "team:" | head -1
 ```
-- 新規プロジェクト作成 → スキーマデプロイ確認
 
-**2. Clerk**
-- ユーザーにClerkダッシュボードでアプリ作成を依頼
-- 環境変数を `.env.local` に設定
+コメント部分から `team: <slug>` を抽出する（例: `team: 4869nanataitai` → slug は `4869nanataitai`）。
 
-**3. 動作確認**
-- `npm run dev` で起動し、認証フローが動作することを確認
+**2. Convexプロジェクト作成 & デプロイ**
+```bash
+cd ~/<project-name>
+npx convex dev --once --configure=new --team <team-slug> --project <project-name>
+```
+
+このコマンドで:
+- 新規Convexプロジェクトが作成される
+- `.env.local` に `NEXT_PUBLIC_CONVEX_URL` と `CONVEX_DEPLOYMENT` が自動書き込みされる
+- スキーマと全Convex関数がデプロイされる
+
+**3. デプロイ確認**
+```bash
+npx convex dev --once
+```
+エラーが出ないことを確認。
+
+**重要: このフェーズでユーザーに質問は一切しない。自動取得・自動実行する。**
 
 ---
 
@@ -356,8 +401,9 @@ npx vercel --yes
 npx vercel --prod
 ```
 
-- 環境変数設定（Convex URL、Clerk keys）
+- 環境変数設定（Convex URL）
 - デプロイ完了後、本番URLで表示確認
+- **注意: この時点ではClerkの認証はまだ設定されていない。認証が必要なページ以外が正常に表示されることを確認する。**
 
 ---
 
@@ -384,18 +430,59 @@ npx vercel --prod
 - Noto Sans JP統一、必須ページ6つ存在、フッターリンク
 
 周回2: 機能 & UX品質
-- サインアップ→ログイン→メイン機能→ログアウト全フロー
-- CRUD操作、ローディング状態、エラー表示、レスポンシブ
+- ランディングページ→料金→必須ページ全フロー
+- ローディング状態、エラー表示、レスポンシブ
 
 周回3+: 本番品質 & セルフ改善
 - OGP、サイトマップ、robots.txt、読み込み速度
 - UX改善、デザイン改善、コピーライティング改善
 
-**終了条件:** 自分が実際にユーザーとして使いたいと思えるレベル
+**終了条件:** 自分が実際にユーザーとして使いたいと思えるレベル（認証フロー以外）
 
 ---
 
-### Phase 8: 完了処理
+### Phase 8: OpenClawでClerk認証セットアップ（最終ステップ）
+
+**⚠️ このフェーズはClaude Codeでは実行できない。OpenClawに委譲する。**
+
+Clerk認証のセットアップには、Clerkダッシュボードでのブラウザ操作（アプリ作成、APIキー取得）が必要であり、Claude Codeのターミナルからは実行できない。
+
+**ユーザーへの指示:**
+
+以下のメッセージをユーザーに表示する:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔐 Clerk認証セットアップ（最終ステップ）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+コードの実装はすべて完了しました！
+残りはClerk認証のセットアップのみです。
+
+OpenClawを起動して、以下のスキルを実行してください:
+
+  📂 skills/clerk-auth-component
+
+このスキルが自動で以下を行います:
+  1. Clerkダッシュボードで新規アプリ作成
+  2. APIキーの取得と .env.local への設定
+  3. Convex との連携設定
+  4. サインイン/サインアップの動作確認
+
+💡 OpenClawの起動方法:
+  ターミナルで `openclaw` と実行するか、
+  ブラウザで OpenClaw のUIを開いてください。
+
+💡 実行時にプロジェクトパスを指定:
+  ~/<project-name>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**このフェーズは上記メッセージを表示したら完了。実際の作業はOpenClawが行う。**
+
+---
+
+### Phase 9: 完了処理
 
 1. `.claude/skills/japan-localize-builder/references/built-products.md` にプロダクト情報を追記
 2. レポート出力:
@@ -417,4 +504,5 @@ npx vercel --prod
 - **プロジェクトパス**: ~/<name>
 - **GitHub**: https://github.com/<user>/<repo>
 - **Vercel本番URL**: https://<name>.vercel.app
+- **Clerk認証**: OpenClawの `clerk-auth-component` スキルで設定（Phase 8参照）
 ```
