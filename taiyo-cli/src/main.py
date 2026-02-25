@@ -205,44 +205,54 @@ async def run_repl(config: Config):
     console = Console()
     tw = _get_terminal_width()
 
-    # ---- Build startup banner (Claude Code style rounded box) ----
+    # ---- Build startup banner (Polymarket-style big ASCII art) ----
     git_branch = _get_git_branch(config.working_dir)
     claude_md = _load_claude_md(config.working_dir)
 
     tokens_up = 0
     tokens_down = 0
 
-    # Prepare raw content lines (no Rich markup for width calc)
-    raw_lines: list[tuple[str, str]] = []  # (display_markup, raw_text)
-    raw_lines.append((f"[bold cyan]* Taiyo CLI v{VERSION}[/]", f"* Taiyo CLI v{VERSION}"))
-    raw_lines.append(("", ""))
-    raw_lines.append(("[dim]/help for help[/]", "/help for help"))
-    raw_lines.append(("", ""))
-    raw_lines.append((f"[dim]cwd: {config.working_dir}[/]", f"cwd: {config.working_dir}"))
-    model_raw = f"model: {config.model} (local)"
-    model_markup = f"[dim]model: {config.model} (local)[/]"
-    if git_branch:
-        model_raw += f"  git: {git_branch}"
-        model_markup += f"  [dim]git: {git_branch}[/]"
-    raw_lines.append((model_markup, model_raw))
-    raw_lines.append((f"[dim]tokens: {tokens_up} ^ / {tokens_down} v[/]", f"tokens: {tokens_up} ^ / {tokens_down} v"))
+    # Big ASCII art logo
+    logo_lines = [
+        "╔════╦╗╔════╦╗╔╗  ╔╗╔════╗",
+        "║╔╗╔╗║║║╔╗╔╗║║║╚╗╔╝║║╔╗╔╗║",
+        "╚╝║║╚╝║╚╝║║╚╝║╔╗╚╝╔╝╚╝║║╚╝",
+        "  ║║  ║║  ║║  ║║╚╗╔╝   ║║  ",
+        "  ║║  ║╚══╝║  ║║ ║║    ║║  ",
+        "  ╚╝  ╚════╝  ╚╝ ╚╝    ╚╝  ",
+    ]
 
-    # Calculate box width
-    max_raw_len = max(len(raw) for _, raw in raw_lines)
-    box_inner = max(max_raw_len + 4, 42)
-    box_inner = min(box_inner, tw - 4)
-
-    # Draw rounded box
     console.print()
-    # Top border
-    console.print(f"[dim]\u256d{'─' * box_inner}\u256e[/]")
-    for markup, raw in raw_lines:
-        padding = box_inner - len(raw) - 2
-        if padding < 0:
-            padding = 0
-        console.print(f"[dim]\u2502[/] {markup}{' ' * padding} [dim]\u2502[/]")
-    # Bottom border
-    console.print(f"[dim]\u2570{'─' * box_inner}\u256f[/]")
+    console.print()
+
+    # Print logo centered with color
+    for line in logo_lines:
+        pad = max(0, (tw - len(line)) // 2)
+        console.print(f"{' ' * pad}[bold cyan]{line}[/]")
+
+    console.print()
+
+    # Subtitle bar (Polymarket-style)
+    sub_text = f"v{VERSION} — Local AI Coding Assistant, powered by Ollama"
+    sub_pad = max(0, (tw - len(sub_text) - 4) // 2)
+    bar_width = min(tw - 4, len(sub_text) + 6)
+    bar_pad = max(0, (tw - bar_width - 2) // 2)
+    console.print(f"{' ' * bar_pad}[dim]╭{'─' * bar_width}╮[/]")
+    console.print(f"{' ' * bar_pad}[dim]│[/]{sub_text:^{bar_width}}[dim]│[/]")
+    console.print(f"{' ' * bar_pad}[dim]╰{'─' * bar_width}╯[/]")
+
+    console.print()
+
+    # Info section
+    info_pad = max(0, (tw - 50) // 2)
+    prefix = " " * info_pad
+
+    console.print(f"{prefix}[dim]  cwd:[/]   {config.working_dir}")
+    model_line = f"{prefix}[dim]  model:[/] {config.model} [dim](local)[/]"
+    if git_branch:
+        model_line += f"  [dim]git:[/] {git_branch}"
+    console.print(model_line)
+    console.print(f"{prefix}[dim]  type /help for commands[/]")
     console.print()
 
     # ---- Initialize tools & client ----
